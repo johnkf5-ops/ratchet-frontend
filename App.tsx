@@ -1,0 +1,38 @@
+import React, { useState } from 'react';
+import Header from './components/Header';
+import Home from './components/Home';
+import LaunchToken from './components/LaunchToken';
+import { AppSection } from './types';
+
+const App: React.FC = () => {
+  const [activeSection, setActiveSection] = useState<AppSection>(AppSection.HOME);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-white text-slate-900">
+      <Header activeSection={activeSection} setActiveSection={setActiveSection} />
+
+      <main className="flex-1 container mx-auto px-6 max-w-4xl">
+        {activeSection === AppSection.HOME && (
+          <Home onLaunch={() => setActiveSection(AppSection.LAUNCH)} />
+        )}
+        {activeSection === AppSection.LAUNCH && <LaunchToken />}
+      </main>
+
+      <footer className="border-t border-slate-100 py-8 text-center text-sm text-slate-400">
+        <p>
+          Built by John Knopf ·{' '}
+          <a
+            href="https://github.com/johnkf5-ops/ratchet-protocol"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-slate-500 hover:text-slate-700"
+          >
+            GitHub
+          </a>
+        </p>
+      </footer>
+    </div>
+  );
+};
+
+export default App;

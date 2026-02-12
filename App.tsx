@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import Header from './components/Header';
 import Home from './components/Home';
 import LaunchToken from './components/LaunchToken';
+import Terms from './components/Terms';
+import Privacy from './components/Privacy';
 import { AppSection } from './types';
 
 const App: React.FC = () => {
@@ -16,11 +18,13 @@ const App: React.FC = () => {
           <Home onLaunch={() => setActiveSection(AppSection.LAUNCH)} />
         )}
         {activeSection === AppSection.LAUNCH && <LaunchToken />}
+        {activeSection === AppSection.TERMS && <Terms />}
+        {activeSection === AppSection.PRIVACY && <Privacy />}
       </main>
 
       <footer className="border-t border-slate-100 py-8 text-center text-sm text-slate-400">
         <p>
-          Built by John Knopf ·{' '}
+          Built by John Knopf &middot;{' '}
           <a
             href="https://github.com/johnkf5-ops/ratchet-protocol"
             target="_blank"
@@ -29,6 +33,20 @@ const App: React.FC = () => {
           >
             GitHub
           </a>
+          {' '}&middot;{' '}
+          <button
+            onClick={() => setActiveSection(AppSection.TERMS)}
+            className="text-slate-500 hover:text-slate-700"
+          >
+            Terms &amp; Conditions
+          </button>
+          {' '}&middot;{' '}
+          <button
+            onClick={() => setActiveSection(AppSection.PRIVACY)}
+            className="text-slate-500 hover:text-slate-700"
+          >
+            Privacy Policy
+          </button>
         </p>
       </footer>
     </div>

@@ -1,6 +1,8 @@
 export enum AppSection {
   HOME = 'home',
   LAUNCH = 'launch',
+  TERMS = 'terms',
+  PRIVACY = 'privacy',
 }
 
 export interface LaunchFormData {

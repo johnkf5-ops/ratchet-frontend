@@ -9,6 +9,10 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ activeSection, setActiveSection }) => {
+  const showBack = activeSection === AppSection.LAUNCH
+    || activeSection === AppSection.TERMS
+    || activeSection === AppSection.PRIVACY;
+
   return (
     <header className="sticky top-0 z-50 bg-white border-b border-slate-100">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -29,12 +33,12 @@ const Header: React.FC<HeaderProps> = ({ activeSection, setActiveSection }) => {
               Launch
             </button>
           )}
-          {activeSection === AppSection.LAUNCH && (
+          {showBack && (
             <button
               onClick={() => setActiveSection(AppSection.HOME)}
               className="text-sm text-slate-500 hover:text-slate-700"
             >
-              ← Back
+              &larr; Back
             </button>
           )}
           <ConnectButton

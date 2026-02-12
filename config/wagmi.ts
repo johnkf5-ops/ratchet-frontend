@@ -1,9 +1,18 @@
 import { getDefaultConfig } from '@rainbow-me/rainbowkit';
 import { baseSepolia, base } from 'wagmi/chains';
 
+const walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;
+if (!walletConnectProjectId || walletConnectProjectId === 'ratchet-app') {
+  console.warn(
+    '[ratchet] Missing VITE_WALLETCONNECT_PROJECT_ID env var. ' +
+    'Mobile wallet connections will fail. ' +
+    'Get a project ID at https://cloud.walletconnect.com'
+  );
+}
+
 export const config = getDefaultConfig({
   appName: 'ratchet.app',
-  projectId: 'ratchet-app', // Replace with actual WalletConnect project ID for production
+  projectId: walletConnectProjectId || 'ratchet-app',
   chains: [baseSepolia, base],
   ssr: false,
 });

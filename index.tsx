@@ -8,6 +8,7 @@ import { config } from './config/wagmi';
 import App from './App';
 
 import '@rainbow-me/rainbowkit/styles.css';
+import './index.css';
 
 const queryClient = new QueryClient();
 

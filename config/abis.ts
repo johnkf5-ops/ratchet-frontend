@@ -78,7 +78,7 @@ export const RatchetFactoryABI = [
   },
   {
     type: 'function',
-    name: 'VERIFIER',
+    name: 'verifier',
     inputs: [],
     outputs: [{ name: '', type: 'address' }],
     stateMutability: 'view',

@@ -1,13 +1,31 @@
 import React, { useState } from 'react';
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { parseEther, parseUnits, decodeEventLog } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { CONTRACTS } from '../config/wagmi';
+import { CONTRACTS, DEFAULT_CHAIN } from '../config/wagmi';
 import { RatchetFactoryABI } from '../config/abis';
 import { LaunchFormData, LaunchResult } from '../types';
 
+const MIN_ETH = 0.001;
+const TEAM_FEE_SHARE_BPS = 500; // 5% — locked at launch, cannot be changed
+
+function formatError(error: Error): string {
+  const msg = error.message;
+  if (msg.includes('User rejected') || msg.includes('User denied')) return 'Transaction cancelled';
+  if (msg.includes('InsufficientETH')) return `Minimum ${MIN_ETH} ETH required for initial liquidity`;
+  if (msg.includes('TeamAllocationTooHigh')) return 'Team allocation cannot exceed 20%';
+  if (msg.includes('ReactiveSellRateTooHigh')) return 'Reactive sell rate cannot exceed 10%';
+  if (msg.includes('TeamFeeShareTooHigh')) return 'Team fee share cannot exceed 50%';
+  if (msg.includes('ZeroTotalSupply')) return 'Total supply must be greater than 0';
+  if (msg.includes('TotalSupplyTooHigh')) return 'Total supply exceeds maximum allowed';
+  if (msg.includes('insufficient funds')) return 'Insufficient ETH balance in your wallet';
+  return 'Transaction failed. Please try again.';
+}
+
 const LaunchToken: React.FC = () => {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
   const [formData, setFormData] = useState<LaunchFormData>({
     name: '',
     symbol: '',
@@ -17,9 +35,10 @@ const LaunchToken: React.FC = () => {
     creator: '',
     ethAmount: '0.01',
   });
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [result, setResult] = useState<LaunchResult | null>(null);
 
-  const { data: hash, writeContract, isPending, error } = useWriteContract();
+  const { data: hash, writeContract, isPending, error, reset: resetTx } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
@@ -28,12 +47,13 @@ const LaunchToken: React.FC = () => {
         // Parse the TokenLaunched event from the receipt
         const event = receipt.logs.find(log => {
           try {
-            const decoded = decodeEventLog({
+            decodeEventLog({
               abi: RatchetFactoryABI,
+              eventName: 'TokenLaunched',
               data: log.data,
-              topics: log.topics,
+              topics: log.topics as [signature: `0x${string}`, ...args: `0x${string}`[]],
             });
-            return decoded.eventName === 'TokenLaunched';
+            return true;
           } catch {
             return false;
           }
@@ -42,12 +62,13 @@ const LaunchToken: React.FC = () => {
         if (event) {
           const decoded = decodeEventLog({
             abi: RatchetFactoryABI,
+            eventName: 'TokenLaunched',
             data: event.data,
-            topics: event.topics,
+            topics: event.topics as [signature: `0x${string}`, ...args: `0x${string}`[]],
           });
           setResult({
-            token: decoded.args.token as `0x${string}`,
-            vault: decoded.args.vault as `0x${string}`,
+            token: decoded.args.token,
+            vault: decoded.args.vault,
             txHash: receipt.transactionHash,
           });
         }
@@ -60,17 +81,51 @@ const LaunchToken: React.FC = () => {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    setValidationError(null);
+  };
+
+  const validate = (): string | null => {
+    const supply = Number(formData.totalSupply);
+    if (!formData.totalSupply || isNaN(supply) || supply <= 0) {
+      return 'Total supply must be a positive number';
+    }
+    if (!Number.isFinite(supply)) {
+      return 'Total supply is too large';
+    }
+
+    const eth = Number(formData.ethAmount);
+    if (!formData.ethAmount || isNaN(eth) || eth <= 0) {
+      return 'ETH amount must be a positive number';
+    }
+    if (eth < MIN_ETH) {
+      return `Minimum ${MIN_ETH} ETH required for initial liquidity`;
+    }
+
+    return null;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isConnected) return;
 
-    // sqrtPriceX96 for initial price: 1 ETH = 1M tokens
+    const err = validate();
+    if (err) {
+      setValidationError(err);
+      return;
+    }
+    setValidationError(null);
+
+    // TODO: sqrtPriceX96 assumes token address > WETH address (token is currency1).
+    // If the deployed token address < WETH, the price direction flips and the pool
+    // will be mispriced. The factory contract should normalize this based on
+    // _sortCurrencies ordering. Until then, this works for most deployments since
+    // CREATE-deployed token addresses are usually > WETH on Base.
     const sqrtPriceX96 = BigInt('79228162514264337593543950336') * BigInt(1000);
     const totalSupplyWei = parseUnits(formData.totalSupply, 18);
 
     writeContract({
+      account: address,
+      chain: DEFAULT_CHAIN,
       address: CONTRACTS.factory,
       abi: RatchetFactoryABI,
       functionName: 'launch',
@@ -80,13 +135,30 @@ const LaunchToken: React.FC = () => {
         totalSupply: totalSupplyWei,
         teamAllocationBps: BigInt(formData.teamAllocationPct * 100),
         initialReactiveSellRate: BigInt(formData.reactiveSellRatePct * 100),
-        teamFeeShareBps: BigInt(500), // 5% fee share
+        teamFeeShareBps: BigInt(TEAM_FEE_SHARE_BPS),
         initialSqrtPriceX96: sqrtPriceX96,
         creator: formData.creator,
       }],
       value: parseEther(formData.ethAmount),
     });
   };
+
+  const handleReset = () => {
+    setResult(null);
+    setValidationError(null);
+    resetTx();
+    setFormData({
+      name: '',
+      symbol: '',
+      totalSupply: '1000000000',
+      teamAllocationPct: 10,
+      reactiveSellRatePct: 5,
+      creator: '',
+      ethAmount: '0.01',
+    });
+  };
+
+  const isWrongChain = isConnected && chainId !== DEFAULT_CHAIN.id;
 
   // Success state
   if (isSuccess && result) {
@@ -137,6 +209,12 @@ const LaunchToken: React.FC = () => {
           >
             View Transaction
           </a>
+          <button
+            onClick={handleReset}
+            className="py-3 px-6 border border-slate-200 rounded-xl font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+          >
+            Launch Another Token
+          </button>
         </div>
       </div>
     );
@@ -155,6 +233,16 @@ const LaunchToken: React.FC = () => {
           <div className="flex justify-center">
             <ConnectButton />
           </div>
+        </div>
+      ) : isWrongChain ? (
+        <div className="text-center space-y-4 py-8">
+          <p className="text-amber-600 font-medium">Wrong network — please switch to {DEFAULT_CHAIN.name}</p>
+          <button
+            onClick={() => switchChain({ chainId: DEFAULT_CHAIN.id })}
+            className="px-6 py-3 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors"
+          >
+            Switch to {DEFAULT_CHAIN.name}
+          </button>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -196,6 +284,8 @@ const LaunchToken: React.FC = () => {
                 onChange={handleInputChange}
                 placeholder="1000000000"
                 required
+                inputMode="numeric"
+                pattern="[0-9]*\.?[0-9]*"
                 className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
               />
             </div>
@@ -253,9 +343,17 @@ const LaunchToken: React.FC = () => {
                 onChange={handleInputChange}
                 placeholder="0.01"
                 required
+                inputMode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
                 className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
               />
+              <p className="text-xs text-slate-400">Minimum {MIN_ETH} ETH required</p>
             </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl text-sm text-slate-500 space-y-1">
+            <p>Team fee share: <span className="font-medium text-slate-700">{TEAM_FEE_SHARE_BPS / 100}%</span> of swap fees go to team</p>
+            <p className="text-xs">This is locked at launch and cannot be changed.</p>
           </div>
 
           <button
@@ -266,10 +364,12 @@ const LaunchToken: React.FC = () => {
             {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Launching...' : 'Launch Token'}
           </button>
 
+          {validationError && (
+            <p className="text-red-600 text-sm text-center">{validationError}</p>
+          )}
+
           {error && (
-            <p className="text-red-600 text-sm text-center">
-              {error.message.includes('User rejected') ? 'Transaction cancelled' : 'Error: ' + error.message}
-            </p>
+            <p className="text-red-600 text-sm text-center">{formatError(error)}</p>
           )}
         </form>
       )}

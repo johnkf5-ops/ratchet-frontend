@@ -24,7 +24,7 @@ function bigIntSqrt(n: bigint): bigint {
 
 // H-1: Compute sqrtPriceX96 from actual ETH and token amounts
 // Assumes WETH is token0 (lower address), launched token is token1.
-// If token < WETH, the factory contract must invert based on _sortCurrencies ordering.
+// The factory contract corrects for currency ordering when token < WETH.
 function computeSqrtPriceX96(ethAmountWei: bigint, tokenAmountWei: bigint): bigint {
   const Q96 = 1n << 96n;
   // sqrtPriceX96 = sqrt(token1/token0) * 2^96 = sqrt(tokenAmount * 2^192 / ethAmount)

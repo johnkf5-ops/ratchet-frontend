@@ -66,13 +66,15 @@ const LaunchToken: React.FC = () => {
     if (!formData.name.trim()) return 'Token name is required';
     if (!formData.symbol.trim()) return 'Token symbol is required';
 
-    // M-3: Total supply must be a positive integer
+    // M-3: Total supply must be a positive integer (use BigInt to avoid Number precision loss)
     if (!formData.totalSupply || !/^\d+$/.test(formData.totalSupply.trim())) {
       return 'Total supply must be a positive whole number';
     }
-    const supply = Number(formData.totalSupply);
-    if (supply <= 0 || !Number.isFinite(supply)) {
-      return 'Total supply must be a positive number';
+    try {
+      const supply = BigInt(formData.totalSupply.trim());
+      if (supply <= 0n) return 'Total supply must be a positive number';
+    } catch {
+      return 'Total supply must be a valid number';
     }
 
     const eth = Number(formData.ethAmount);
@@ -87,9 +89,14 @@ const LaunchToken: React.FC = () => {
   };
 
   // H-1: Compute launch args dynamically (including correct sqrtPriceX96)
+  // M-2: Inline validation logic to avoid stale closure on validate() reference
   const launchArgs = useMemo(() => {
     if (!formData.name || !formData.symbol || !formData.totalSupply || !formData.ethAmount) return null;
-    if (validate() !== null) return null;
+    // Quick validation inline (mirrors validate() to avoid stale closure)
+    if (!/^\d+$/.test(formData.totalSupply.trim())) return null;
+    try { if (BigInt(formData.totalSupply.trim()) <= 0n) return null; } catch { return null; }
+    const ethNum = Number(formData.ethAmount);
+    if (isNaN(ethNum) || ethNum < MIN_ETH) return null;
 
     try {
       const totalSupplyWei = parseUnits(formData.totalSupply, 18);

@@ -88,15 +88,6 @@ const Home: React.FC<HomeProps> = ({ onLaunch }) => {
         </div>
       </section>
 
-      {/* Bottom CTA */}
-      <section className="text-center">
-        <button
-          onClick={onLaunch}
-          className="bg-slate-900 text-white px-12 py-4 rounded-full text-lg font-bold hover:bg-slate-800 transition-colors"
-        >
-          Launch a Token
-        </button>
-      </section>
     </div>
   );
 };

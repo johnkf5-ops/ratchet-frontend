@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import React, { useState, useMemo } from 'react';
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt, useSimulateContract } from 'wagmi';
 import { parseEther, parseUnits, decodeEventLog } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { CONTRACTS, DEFAULT_CHAIN } from '../config/wagmi';
@@ -8,6 +8,28 @@ import { LaunchFormData, LaunchResult } from '../types';
 
 const MIN_ETH = 0.001;
 const TEAM_FEE_SHARE_BPS = 500; // 5% — locked at launch, cannot be changed
+const EXPLORER_URL = DEFAULT_CHAIN.blockExplorers?.default?.url ?? 'https://sepolia.basescan.org';
+
+// H-1: BigInt integer square root (Newton's method)
+function bigIntSqrt(n: bigint): bigint {
+  if (n === 0n) return 0n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+
+// H-1: Compute sqrtPriceX96 from actual ETH and token amounts
+// Assumes WETH is token0 (lower address), launched token is token1.
+// If token < WETH, the factory contract must invert based on _sortCurrencies ordering.
+function computeSqrtPriceX96(ethAmountWei: bigint, tokenAmountWei: bigint): bigint {
+  const Q96 = 1n << 96n;
+  // sqrtPriceX96 = sqrt(token1/token0) * 2^96 = sqrt(tokenAmount * 2^192 / ethAmount)
+  return bigIntSqrt((tokenAmountWei * Q96 * Q96) / ethAmountWei);
+}
 
 function formatError(error: Error): string {
   const msg = error.message;
@@ -38,13 +60,83 @@ const LaunchToken: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [result, setResult] = useState<LaunchResult | null>(null);
 
+  const isWrongChain = isConnected && chainId !== DEFAULT_CHAIN.id;
+
+  const validate = (): string | null => {
+    if (!formData.name.trim()) return 'Token name is required';
+    if (!formData.symbol.trim()) return 'Token symbol is required';
+
+    // M-3: Total supply must be a positive integer
+    if (!formData.totalSupply || !/^\d+$/.test(formData.totalSupply.trim())) {
+      return 'Total supply must be a positive whole number';
+    }
+    const supply = Number(formData.totalSupply);
+    if (supply <= 0 || !Number.isFinite(supply)) {
+      return 'Total supply must be a positive number';
+    }
+
+    const eth = Number(formData.ethAmount);
+    if (!formData.ethAmount || isNaN(eth) || eth <= 0) {
+      return 'ETH amount must be a positive number';
+    }
+    if (eth < MIN_ETH) {
+      return `Minimum ${MIN_ETH} ETH required for initial liquidity`;
+    }
+
+    return null;
+  };
+
+  // H-1: Compute launch args dynamically (including correct sqrtPriceX96)
+  const launchArgs = useMemo(() => {
+    if (!formData.name || !formData.symbol || !formData.totalSupply || !formData.ethAmount) return null;
+    if (validate() !== null) return null;
+
+    try {
+      const totalSupplyWei = parseUnits(formData.totalSupply, 18);
+      const ethAmountWei = parseEther(formData.ethAmount);
+      const teamAllocationBps = BigInt(formData.teamAllocationPct * 100);
+
+      // Price is based on LP token amount (after team allocation)
+      const lpTokenAmount = totalSupplyWei - (totalSupplyWei * teamAllocationBps / 10000n);
+      const sqrtPriceX96 = computeSqrtPriceX96(ethAmountWei, lpTokenAmount);
+
+      return {
+        args: [{
+          name: formData.name,
+          symbol: formData.symbol.toUpperCase(),
+          totalSupply: totalSupplyWei,
+          teamAllocationBps,
+          initialReactiveSellRate: BigInt(formData.reactiveSellRatePct * 100),
+          teamFeeShareBps: BigInt(TEAM_FEE_SHARE_BPS),
+          initialSqrtPriceX96: sqrtPriceX96,
+          creator: formData.creator,
+        }] as const,
+        value: ethAmountWei,
+      };
+    } catch {
+      return null;
+    }
+  }, [formData]);
+
+  // H-2: Simulate transaction before prompting wallet
+  const { data: simulateData, error: simulateError } = useSimulateContract({
+    account: address,
+    address: CONTRACTS.factory,
+    abi: RatchetFactoryABI,
+    functionName: 'launch',
+    args: launchArgs?.args,
+    value: launchArgs?.value,
+    query: {
+      enabled: isConnected && !isWrongChain && !!launchArgs && !!address,
+    },
+  });
+
   const { data: hash, writeContract, isPending, error, reset: resetTx } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
     query: {
       select: (receipt) => {
-        // Parse the TokenLaunched event from the receipt
         const event = receipt.logs.find(log => {
           try {
             decodeEventLog({
@@ -84,26 +176,6 @@ const LaunchToken: React.FC = () => {
     setValidationError(null);
   };
 
-  const validate = (): string | null => {
-    const supply = Number(formData.totalSupply);
-    if (!formData.totalSupply || isNaN(supply) || supply <= 0) {
-      return 'Total supply must be a positive number';
-    }
-    if (!Number.isFinite(supply)) {
-      return 'Total supply is too large';
-    }
-
-    const eth = Number(formData.ethAmount);
-    if (!formData.ethAmount || isNaN(eth) || eth <= 0) {
-      return 'ETH amount must be a positive number';
-    }
-    if (eth < MIN_ETH) {
-      return `Minimum ${MIN_ETH} ETH required for initial liquidity`;
-    }
-
-    return null;
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isConnected) return;
@@ -115,32 +187,23 @@ const LaunchToken: React.FC = () => {
     }
     setValidationError(null);
 
-    // TODO: sqrtPriceX96 assumes token address > WETH address (token is currency1).
-    // If the deployed token address < WETH, the price direction flips and the pool
-    // will be mispriced. The factory contract should normalize this based on
-    // _sortCurrencies ordering. Until then, this works for most deployments since
-    // CREATE-deployed token addresses are usually > WETH on Base.
-    const sqrtPriceX96 = BigInt('79228162514264337593543950336') * BigInt(1000);
-    const totalSupplyWei = parseUnits(formData.totalSupply, 18);
-
-    writeContract({
-      account: address,
-      chain: DEFAULT_CHAIN,
-      address: CONTRACTS.factory,
-      abi: RatchetFactoryABI,
-      functionName: 'launch',
-      args: [{
-        name: formData.name,
-        symbol: formData.symbol.toUpperCase(),
-        totalSupply: totalSupplyWei,
-        teamAllocationBps: BigInt(formData.teamAllocationPct * 100),
-        initialReactiveSellRate: BigInt(formData.reactiveSellRatePct * 100),
-        teamFeeShareBps: BigInt(TEAM_FEE_SHARE_BPS),
-        initialSqrtPriceX96: sqrtPriceX96,
-        creator: formData.creator,
-      }],
-      value: parseEther(formData.ethAmount),
-    });
+    // H-2: Use simulated request if available, fall back to direct call
+    if (simulateData?.request) {
+      writeContract(simulateData.request);
+    } else if (simulateError) {
+      setValidationError(formatError(simulateError as Error));
+    } else if (launchArgs) {
+      // Simulation still loading — submit directly as fallback
+      writeContract({
+        account: address,
+        chain: DEFAULT_CHAIN,
+        address: CONTRACTS.factory,
+        abi: RatchetFactoryABI,
+        functionName: 'launch',
+        args: launchArgs.args,
+        value: launchArgs.value,
+      });
+    }
   };
 
   const handleReset = () => {
@@ -157,8 +220,6 @@ const LaunchToken: React.FC = () => {
       ethAmount: '0.01',
     });
   };
-
-  const isWrongChain = isConnected && chainId !== DEFAULT_CHAIN.id;
 
   // Success state
   if (isSuccess && result) {
@@ -184,9 +245,10 @@ const LaunchToken: React.FC = () => {
           </div>
         </div>
 
+        {/* M-2: Dynamic explorer URLs based on chain config */}
         <div className="flex flex-col gap-3">
           <a
-            href={`https://sepolia.basescan.org/address/${result.token}`}
+            href={`${EXPLORER_URL}/address/${result.token}`}
             target="_blank"
             rel="noopener noreferrer"
             className="block text-center py-3 px-6 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors"
@@ -194,7 +256,7 @@ const LaunchToken: React.FC = () => {
             View Token on BaseScan
           </a>
           <a
-            href={`https://sepolia.basescan.org/address/${result.vault}`}
+            href={`${EXPLORER_URL}/address/${result.vault}`}
             target="_blank"
             rel="noopener noreferrer"
             className="block text-center py-3 px-6 bg-slate-100 text-slate-900 rounded-xl font-medium hover:bg-slate-200 transition-colors"
@@ -202,7 +264,7 @@ const LaunchToken: React.FC = () => {
             View Vault on BaseScan
           </a>
           <a
-            href={`https://sepolia.basescan.org/tx/${result.txHash}`}
+            href={`${EXPLORER_URL}/tx/${result.txHash}`}
             target="_blank"
             rel="noopener noreferrer"
             className="block text-center py-3 px-6 text-slate-500 hover:text-slate-700 transition-colors text-sm"
@@ -224,7 +286,7 @@ const LaunchToken: React.FC = () => {
     <div className="max-w-lg mx-auto py-20 space-y-8">
       <div className="text-center space-y-2">
         <h1 className="text-3xl font-bold text-slate-900">Launch Token</h1>
-        <p className="text-slate-500">Deploy on Base Sepolia</p>
+        <p className="text-slate-500">Deploy on {DEFAULT_CHAIN.name}</p>
       </div>
 
       {!isConnected ? (
@@ -250,6 +312,7 @@ const LaunchToken: React.FC = () => {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-slate-700">Token Name</label>
+                {/* M-4: maxLength to prevent excessive gas / UI breakage */}
                 <input
                   type="text"
                   name="name"
@@ -257,6 +320,7 @@ const LaunchToken: React.FC = () => {
                   onChange={handleInputChange}
                   placeholder="My Token"
                   required
+                  maxLength={32}
                   className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
                 />
               </div>
@@ -277,6 +341,7 @@ const LaunchToken: React.FC = () => {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Total Supply</label>
+              {/* M-3: Integer-only input */}
               <input
                 type="text"
                 name="totalSupply"
@@ -285,9 +350,10 @@ const LaunchToken: React.FC = () => {
                 placeholder="1000000000"
                 required
                 inputMode="numeric"
-                pattern="[0-9]*\.?[0-9]*"
+                pattern="[0-9]+"
                 className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
               />
+              <p className="text-xs text-slate-400">Whole numbers only, no decimals</p>
             </div>
 
             <div className="space-y-2">
@@ -329,6 +395,7 @@ const LaunchToken: React.FC = () => {
                 value={formData.creator}
                 onChange={handleInputChange}
                 placeholder="twitter:@jack"
+                maxLength={64}
                 className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
               />
               <p className="text-xs text-slate-400">Leave empty to claim ownership immediately</p>
@@ -370,6 +437,10 @@ const LaunchToken: React.FC = () => {
 
           {error && (
             <p className="text-red-600 text-sm text-center">{formatError(error)}</p>
+          )}
+
+          {simulateError && !validationError && !error && (
+            <p className="text-amber-600 text-sm text-center">{formatError(simulateError as Error)}</p>
           )}
         </form>
       )}

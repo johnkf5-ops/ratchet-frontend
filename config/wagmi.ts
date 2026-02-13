@@ -17,10 +17,10 @@ export const config = getDefaultConfig({
   ssr: false,
 });
 
-// Contract addresses
+// M-1: Contract addresses from env vars (with testnet fallbacks)
 export const CONTRACTS = {
-  factory: '0xe562B41c0E1B9260AF721dBFC49478A052A8bA64' as `0x${string}`,
-  hook: '0x26B818a9BFD19999A4782b471fe43cc18FF84044' as `0x${string}`,
+  factory: (import.meta.env.VITE_FACTORY_ADDRESS || '0xe562B41c0E1B9260AF721dBFC49478A052A8bA64') as `0x${string}`,
+  hook: (import.meta.env.VITE_HOOK_ADDRESS || '0x26B818a9BFD19999A4782b471fe43cc18FF84044') as `0x${string}`,
 } as const;
 
 // Chain configuration

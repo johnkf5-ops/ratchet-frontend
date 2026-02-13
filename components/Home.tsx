@@ -10,16 +10,13 @@ const Home: React.FC<HomeProps> = ({ onLaunch }) => {
       {/* TOP Section — Hero */}
       <section className="text-center space-y-6">
         <h1 className="text-4xl md:text-5xl font-bold text-slate-900 tracking-tight leading-tight">
-          Don't trust; simply verify any token is a rug-free zone with Ratchet.
+          Dev gets paid. Dev can't dump.
         </h1>
         <p className="text-xl text-slate-600 leading-relaxed">
-          Ratchet is a first of kind token management system that prevents creators and developers from draining token liquidity to get paid.
+          A new way to launch tokens on Base.
         </p>
         <p className="text-xl text-slate-600 leading-relaxed">
-          In a few clicks, creators and developers can launch any token and have multiple ways to make money without undermining holders and performance.
-        </p>
-        <p className="text-2xl font-bold text-slate-900">
-          Don't get rugged; get Ratchet.
+          No dump button. No rug switch. Just sustainable revenue.
         </p>
         <div className="pt-4">
           <button

@@ -23,6 +23,11 @@ const App: React.FC = () => {
       </main>
 
       <footer className="border-t border-slate-100 py-8 text-center text-sm text-slate-400">
+        <p className="mb-2">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-600 text-xs font-medium">
+            Built on Base
+          </span>
+        </p>
         <p>
           Built by John Knopf &middot;{' '}
           <a
